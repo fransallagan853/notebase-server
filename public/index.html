@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>noteBase Admin Server</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div>
+        <h1>noteBase Admin</h1>
+        <p>Dashboard server untuk upload data pusat dan generate SQLite.gz</p>
+      </div>
+      <button id="btnCheckServer">Cek Server</button>
+    </header>
+
+    <section class="cards">
+      <div class="card">
+        <span>Status Server</span>
+        <strong id="serverStatus">-</strong>
+      </div>
+
+      <div class="card">
+        <span>Total Data Update</span>
+        <strong id="totalRows">-</strong>
+      </div>
+
+      <div class="card">
+        <span>Versi Update</span>
+        <strong id="versionCode">-</strong>
+      </div>
+    </section>
+
+    <section class="panel">
+  <h2>Upload Data Pusat</h2>
+  <p class="muted">
+    Upload CSV dari pusat. Jika header file rapi, gunakan Mapping Otomatis. Jika header file tidak jelas, gunakan Mapping Manual.
+  </p>
+
+  <div class="form-row">
+    <input
+      type="text"
+      id="manualLeasingInput"
+      placeholder="Leasing manual, contoh: TAF / ADIRA / BCA"
+    />
+
+    <input
+      type="text"
+      id="manualCabangInput"
+      placeholder="Cabang manual, contoh: JABAR / DEPOK / BEKASI"
+    />
+  </div>
+
+  <div class="form-row">
+    <input type="file" id="csvFile" accept=".csv" />
+    <button id="btnUpload">Upload CSV</button>
+  </div>
+
+  <div class="upload-mode-box">
+    <label>
+      <input type="radio" name="uploadMode" value="auto" checked />
+      Mapping Otomatis
+    </label>
+
+    <label>
+      <input type="radio" name="uploadMode" value="manual" />
+      Mapping Manual
+    </label>
+  </div>
+
+  <p class="muted">
+    Leasing/Cabang manual dipakai jika kolom leasing/cabang tidak ada atau kosong di file.
+  </p>
+
+  <div class="form-row">
+    <button id="btnReadHeaders">Baca Header</button>
+  </div>
+
+  <div id="mappingSection" class="mapping-section hidden">
+    <h3>Mapping Manual Kolom CSV</h3>
+    <p class="muted">Pilih kolom CSV yang sesuai dengan field noteBase. Nopol wajib dipilih.</p>
+
+    <div class="mapping-grid">
+      <label>Nopol
+        <select id="mapNopol"></select>
+      </label>
+
+      <label>Kendaraan
+        <select id="mapKendaraan"></select>
+      </label>
+
+      <label>Tahun
+        <select id="mapTahun"></select>
+      </label>
+
+      <label>Warna
+        <select id="mapWarna"></select>
+      </label>
+
+      <label>No Rangka
+        <select id="mapNoRangka"></select>
+      </label>
+
+      <label>No Mesin
+        <select id="mapNoMesin"></select>
+      </label>
+
+      <label>Leasing
+        <select id="mapLeasing"></select>
+      </label>
+
+      <label>Cabang
+        <select id="mapCabang"></select>
+      </label>
+
+      <label>Saldo
+        <select id="mapSaldo"></select>
+      </label>
+
+      <label>OVD
+        <select id="mapOverdue"></select>
+      </label>
+
+      <label>Catatan
+        <select id="mapCatatan"></select>
+      </label>
+    </div>
+  </div>
+
+  <p id="uploadStatus" class="muted">Belum ada file diupload.</p>
+</section>
+
+    <section class="panel">
+      <h2>Generate Update SQLite.gz</h2>
+      <p class="muted">
+        Gunakan CSV terakhir yang sudah diupload untuk membuat file update APK.
+      </p>
+
+      <button id="btnGenerate">Generate Update</button>
+      <p id="generateStatus" class="muted">Belum generate update.</p>
+    </section>
+
+    <section class="panel">
+      <h2>Update Terbaru</h2>
+      <button id="btnLatest">Cek Update Terbaru</button>
+
+      <pre id="latestOutput">Belum ada data.</pre>
+    </section>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -13,6 +13,7 @@ const app = express();
 
 app.use(cors());
 app.use(express.json());
+app.use("/admin", express.static(path.join(__dirname, "public")));
 
 const PORT = process.env.PORT || 5000;
 
@@ -89,7 +90,13 @@ app.post("/api/admin/upload-csv", upload.single("file"), (req, res) => {
 
 app.post("/api/admin/generate-update", async (req, res) => {
   try {
-    const fileName = req.body?.fileName || getLatestUploadedFile();
+   const body = req.body || {};
+
+    const fileName = body.fileName || getLatestUploadedFile();
+    const mode = body.mode || "auto";
+    const manualLeasing = body.manualLeasing || "";
+    const manualCabang = body.manualCabang || "";
+    const mapping = body.mapping || {};
 
     if (!fileName) {
       return res.status(400).json({
@@ -197,7 +204,12 @@ app.post("/api/admin/generate-update", async (req, res) => {
     db.run("BEGIN TRANSACTION;");
 
     for (const row of records) {
-      const vehicle = mapRowToVehicle(row);
+      const vehicle = mapRowToVehicle(row, {
+        mode,
+        mapping,
+        manualLeasing,
+        manualCabang
+    });
 
       if (!vehicle.nopol) {
         failed++;
@@ -248,17 +260,20 @@ app.post("/api/admin/generate-update", async (req, res) => {
     fs.writeFileSync(gzipPath, gzipData);
 
     const metadata = {
-      success: true,
-      versionCode: timestamp,
-      sourceCsv: fileName,
-      sqliteFile: sqliteFileName,
-      gzipFile: gzipFileName,
-      sqlitePath,
-      gzipPath,
-      totalRows: records.length,
-      insertedRows: success,
-      failedRows: failed,
-      createdAt: new Date().toISOString()
+    success: true,
+    versionCode: timestamp,
+    sourceCsv: fileName,
+    mode,
+    manualLeasing,
+    manualCabang,
+    sqliteFile: sqliteFileName,
+    gzipFile: gzipFileName,
+    sqlitePath,
+    gzipPath,
+    totalRows: records.length,
+    insertedRows: success,
+    failedRows: failed,
+    createdAt: new Date().toISOString()
     };
 
     fs.writeFileSync(
@@ -357,7 +372,20 @@ function normalizeHeader(header) {
     .replace(/:/g, "");
 }
 
-function mapRowToVehicle(row) {
+function mapRowToVehicle(row, options = {}) {
+  const mode = options.mode || "auto";
+
+  if (mode === "manual") {
+    return mapRowToVehicleManual(row, options);
+  }
+
+  return mapRowToVehicleAuto(row, options);
+}
+
+function mapRowToVehicleAuto(row, options = {}) {
+  const manualLeasing = options.manualLeasing || "";
+  const manualCabang = options.manualCabang || "";
+
   const nopol = getValue(row, [
     "nopol",
     "nopolisi",
@@ -429,7 +457,7 @@ function mapRowToVehicle(row) {
     "enginenumber"
   ]);
 
-  const leasing = getValue(row, [
+  const leasingFromFile = getValue(row, [
     "leasing",
     "lising",
     "finance",
@@ -440,7 +468,7 @@ function mapRowToVehicle(row) {
     "namalising"
   ]);
 
-  const cabang = getValue(row, [
+  const cabangFromFile = getValue(row, [
     "cabang",
     "branch",
     "wilayah",
@@ -450,6 +478,9 @@ function mapRowToVehicle(row) {
     "kantorcabang",
     "lokasicabang"
   ]);
+
+  const leasing = leasingFromFile || manualLeasing;
+  const cabang = cabangFromFile || manualCabang;
 
   const saldo = getValue(row, [
     "saldo",
@@ -486,6 +517,83 @@ function mapRowToVehicle(row) {
     "info",
     "informasi"
   ]);
+
+  return buildVehicle({
+    nopol,
+    namaKendaraan,
+    tahun,
+    warna,
+    noRangka,
+    noMesin,
+    leasing,
+    cabang,
+    saldo,
+    overdue,
+    catatan
+  });
+}
+
+function mapRowToVehicleManual(row, options = {}) {
+  const mapping = options.mapping || {};
+  const manualLeasing = options.manualLeasing || "";
+  const manualCabang = options.manualCabang || "";
+
+  const nopol = getMappedValue(row, mapping.nopol);
+  const namaKendaraan = getMappedValue(row, mapping.namaKendaraan);
+  const tahun = getMappedValue(row, mapping.tahun);
+  const warna = getMappedValue(row, mapping.warna);
+  const noRangka = getMappedValue(row, mapping.noRangka);
+  const noMesin = getMappedValue(row, mapping.noMesin);
+
+  const leasingFromFile = getMappedValue(row, mapping.leasing);
+  const cabangFromFile = getMappedValue(row, mapping.cabang);
+
+  const leasing = leasingFromFile || manualLeasing;
+  const cabang = cabangFromFile || manualCabang;
+
+  const saldo = getMappedValue(row, mapping.saldo);
+  const overdue = getMappedValue(row, mapping.overdue);
+  const catatan = getMappedValue(row, mapping.catatan);
+
+  return buildVehicle({
+    nopol,
+    namaKendaraan,
+    tahun,
+    warna,
+    noRangka,
+    noMesin,
+    leasing,
+    cabang,
+    saldo,
+    overdue,
+    catatan
+  });
+}
+
+function getMappedValue(row, mappedHeader) {
+  if (!mappedHeader) return "";
+
+  const key = normalizeHeader(mappedHeader);
+
+  if (row[key] !== undefined && row[key] !== null) {
+    return String(row[key]).trim();
+  }
+
+  return "";
+}
+
+function buildVehicle(data) {
+  const nopol = data.nopol || "";
+  const namaKendaraan = data.namaKendaraan || "";
+  const tahun = data.tahun || "";
+  const warna = data.warna || "";
+  const noRangka = data.noRangka || "";
+  const noMesin = data.noMesin || "";
+  const leasing = data.leasing || "";
+  const cabang = data.cabang || "";
+  const saldo = data.saldo || "";
+  const overdue = data.overdue || "";
+  const catatan = data.catatan || "";
 
   return {
     nopol,
@@ -536,6 +644,10 @@ function normalizeText(value) {
     .replace(/\s+/g, "")
     .replace(/[^a-z0-9]/g, "");
 }
+
+app.get("/admin", (req, res) => {
+  res.redirect("/admin/");
+});
 
 app.listen(PORT, () => {
   console.log(`noteBase server running on http://localhost:${PORT}`);
