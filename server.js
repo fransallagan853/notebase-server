@@ -627,7 +627,19 @@ function buildVehicle(data) {
     saldo,
     overdue,
     catatan,
-    searchKey: makeSearchKey(nopol, namaKendaraan, leasing, cabang),
+    searchKey: makeSearchKey(
+  nopol,
+  namaKendaraan,
+  tahun,
+  warna,
+  noRangka,
+  noMesin,
+  leasing,
+  cabang,
+  saldo,
+  overdue,
+  catatan
+),
     sourceType: "ADMIN",
     status: "approved",
     updatedAt: new Date().toISOString()
@@ -653,8 +665,8 @@ function extractGroupNumber(nopol) {
   return match[0].substring(0, 4);
 }
 
-function makeSearchKey(nopol, namaKendaraan, leasing, cabang) {
-  return normalizeText(`${nopol} ${namaKendaraan} ${leasing} ${cabang}`);
+function makeSearchKey(...fields) {
+  return normalizeText(fields.join(" "));
 }
 
 function normalizeText(value) {
