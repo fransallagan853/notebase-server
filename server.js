@@ -90,7 +90,7 @@ app.post("/api/admin/upload-csv", upload.single("file"), (req, res) => {
 
 app.post("/api/admin/generate-update", async (req, res) => {
   try {
-   const body = req.body || {};
+    const body = req.body || {};
 
     const fileName = body.fileName || getLatestUploadedFile();
     const mode = body.mode || "auto";
@@ -136,44 +136,18 @@ app.post("/api/admin/generate-update", async (req, res) => {
       locateFile: (file) => path.join(__dirname, "node_modules", "sql.js", "dist", file)
     });
 
-    const db = new SQL.Database();
+    const masterPath = path.join(updateDir, "master.sqlite");
 
-    db.run(`
-      CREATE TABLE kendaraan_update (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nopol TEXT NOT NULL,
-        groupNumber TEXT,
-        namaKendaraan TEXT,
-        tahun TEXT,
-        warna TEXT,
-        noRangka TEXT,
-        noMesin TEXT,
-        leasing TEXT,
-        cabang TEXT,
-        saldo TEXT,
-        overdue TEXT,
-        catatan TEXT,
-        searchKey TEXT,
-        sourceType TEXT,
-        status TEXT,
-        updatedAt TEXT
-      );
-    `);
+    let db;
 
-    db.run(`
-      CREATE UNIQUE INDEX idx_unique_vehicle
-      ON kendaraan_update(nopol, leasing, cabang);
-    `);
+    if (fs.existsSync(masterPath)) {
+      const masterData = fs.readFileSync(masterPath);
+      db = new SQL.Database(masterData);
+    } else {
+      db = new SQL.Database();
+    }
 
-    db.run(`
-      CREATE INDEX idx_search_key
-      ON kendaraan_update(searchKey);
-    `);
-
-    db.run(`
-      CREATE INDEX idx_group_number
-      ON kendaraan_update(groupNumber);
-    `);
+    ensureVehicleSchema(db);
 
     const insert = db.prepare(`
       INSERT OR REPLACE INTO kendaraan_update (
@@ -209,7 +183,7 @@ app.post("/api/admin/generate-update", async (req, res) => {
         mapping,
         manualLeasing,
         manualCabang
-    });
+      });
 
       if (!vehicle.nopol) {
         failed++;
@@ -241,8 +215,13 @@ app.post("/api/admin/generate-update", async (req, res) => {
     db.run("COMMIT;");
     insert.free();
 
+    const totalResult = db.exec("SELECT COUNT(*) AS total FROM kendaraan_update");
+    const totalMasterRows = totalResult?.[0]?.values?.[0]?.[0] || 0;
+
     const sqliteData = db.export();
     db.close();
+
+    fs.writeFileSync(masterPath, Buffer.from(sqliteData));
 
     const timestamp = Date.now();
     const sqliteFileName = `notebase_update_${timestamp}.sqlite`;
@@ -260,20 +239,22 @@ app.post("/api/admin/generate-update", async (req, res) => {
     fs.writeFileSync(gzipPath, gzipData);
 
     const metadata = {
-    success: true,
-    versionCode: timestamp,
-    sourceCsv: fileName,
-    mode,
-    manualLeasing,
-    manualCabang,
-    sqliteFile: sqliteFileName,
-    gzipFile: gzipFileName,
-    sqlitePath,
-    gzipPath,
-    totalRows: records.length,
-    insertedRows: success,
-    failedRows: failed,
-    createdAt: new Date().toISOString()
+      success: true,
+      versionCode: timestamp,
+      sourceCsv: fileName,
+      mode,
+      manualLeasing,
+      manualCabang,
+      csvRows: records.length,
+      processedRows: success,
+      failedRows: failed,
+      totalRows: totalMasterRows,
+      sqliteFile: sqliteFileName,
+      gzipFile: gzipFileName,
+      sqlitePath,
+      gzipPath,
+      masterPath,
+      createdAt: new Date().toISOString()
     };
 
     fs.writeFileSync(
@@ -283,7 +264,7 @@ app.post("/api/admin/generate-update", async (req, res) => {
 
     return res.json({
       success: true,
-      message: "SQLite.gz berhasil dibuat",
+      message: "Master SQLite.gz berhasil dibuat",
       data: metadata
     });
   } catch (error) {
@@ -291,7 +272,7 @@ app.post("/api/admin/generate-update", async (req, res) => {
 
     return res.status(500).json({
       success: false,
-      message: "Gagal generate SQLite.gz",
+      message: "Gagal generate master SQLite.gz",
       error: error.message
     });
   }
@@ -329,6 +310,44 @@ app.get("/api/update/download/:fileName", (req, res) => {
   return res.download(filePath);
 });
 
+function ensureVehicleSchema(db) {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS kendaraan_update (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      nopol TEXT NOT NULL,
+      groupNumber TEXT,
+      namaKendaraan TEXT,
+      tahun TEXT,
+      warna TEXT,
+      noRangka TEXT,
+      noMesin TEXT,
+      leasing TEXT,
+      cabang TEXT,
+      saldo TEXT,
+      overdue TEXT,
+      catatan TEXT,
+      searchKey TEXT,
+      sourceType TEXT,
+      status TEXT,
+      updatedAt TEXT
+    );
+  `);
+
+  db.run(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_vehicle
+    ON kendaraan_update(nopol, leasing, cabang);
+  `);
+
+  db.run(`
+    CREATE INDEX IF NOT EXISTS idx_search_key
+    ON kendaraan_update(searchKey);
+  `);
+
+  db.run(`
+    CREATE INDEX IF NOT EXISTS idx_group_number
+    ON kendaraan_update(groupNumber);
+  `);
+}
 function getLatestUploadedFile() {
   const files = fs
     .readdirSync(uploadDir)
