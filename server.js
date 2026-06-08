@@ -630,14 +630,11 @@ function buildVehicle(data) {
     searchKey: makeSearchKey(
   nopol,
   namaKendaraan,
-  tahun,
   warna,
   noRangka,
   noMesin,
   leasing,
   cabang,
-  saldo,
-  overdue,
   catatan
 ),
     sourceType: "ADMIN",
