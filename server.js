@@ -137,6 +137,7 @@ app.post("/api/admin/generate-update", async (req, res) => {
     });
 
     const masterPath = path.join(updateDir, "master.sqlite");
+    const newVersion = Date.now();
 
     let db;
 
@@ -166,9 +167,10 @@ app.post("/api/admin/generate-update", async (req, res) => {
         searchKey,
         sourceType,
         status,
-        updatedAt
+        updatedAt,
+        dataVersion
       ) VALUES (
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       );
     `);
 
@@ -206,7 +208,8 @@ app.post("/api/admin/generate-update", async (req, res) => {
         vehicle.searchKey,
         vehicle.sourceType,
         vehicle.status,
-        vehicle.updatedAt
+        vehicle.updatedAt,
+        newVersion
       ]);
 
       success++;
@@ -223,24 +226,13 @@ app.post("/api/admin/generate-update", async (req, res) => {
 
     fs.writeFileSync(masterPath, Buffer.from(sqliteData));
 
-    const timestamp = Date.now();
-    const sqliteFileName = `notebase_update_${timestamp}.sqlite`;
-    const gzipFileName = `${sqliteFileName}.gz`;
-
-    const sqlitePath = path.join(updateDir, sqliteFileName);
-    const gzipPath = path.join(updateDir, gzipFileName);
-
-    fs.writeFileSync(sqlitePath, Buffer.from(sqliteData));
-
-    const gzipData = zlib.gzipSync(Buffer.from(sqliteData), {
-      level: 9
-    });
-
-    fs.writeFileSync(gzipPath, gzipData);
+    // FULL file: dipakai user baru / install ulang.
+    const fullFile = writeSqliteGzip(sqliteData, `notebase_full_${newVersion}`);
 
     const metadata = {
       success: true,
-      versionCode: timestamp,
+      updateType: "full",
+      versionCode: newVersion,
       sourceCsv: fileName,
       mode,
       manualLeasing,
@@ -249,10 +241,10 @@ app.post("/api/admin/generate-update", async (req, res) => {
       processedRows: success,
       failedRows: failed,
       totalRows: totalMasterRows,
-      sqliteFile: sqliteFileName,
-      gzipFile: gzipFileName,
-      sqlitePath,
-      gzipPath,
+      sqliteFile: fullFile.sqliteFileName,
+      gzipFile: fullFile.gzipFileName,
+      sqlitePath: fullFile.sqlitePath,
+      gzipPath: fullFile.gzipPath,
       masterPath,
       createdAt: new Date().toISOString()
     };
@@ -264,7 +256,7 @@ app.post("/api/admin/generate-update", async (req, res) => {
 
     return res.json({
       success: true,
-      message: "Master SQLite.gz berhasil dibuat",
+      message: "FULL SQLite.gz berhasil dibuat. DELTA akan dibuat otomatis saat APK sync.",
       data: metadata
     });
   } catch (error) {
@@ -272,28 +264,88 @@ app.post("/api/admin/generate-update", async (req, res) => {
 
     return res.status(500).json({
       success: false,
-      message: "Gagal generate master SQLite.gz",
+      message: "Gagal generate SQLite.gz",
       error: error.message
     });
   }
 });
 
-app.get("/api/update/latest", (req, res) => {
-  const latestPath = path.join(updateDir, "latest.json");
+app.get("/api/update/latest", async (req, res) => {
+  try {
+    const latestPath = path.join(updateDir, "latest.json");
 
-  if (!fs.existsSync(latestPath)) {
-    return res.status(404).json({
+    if (!fs.existsSync(latestPath)) {
+      return res.status(404).json({
+        success: false,
+        message: "Belum ada update tersedia"
+      });
+    }
+
+    const latest = JSON.parse(fs.readFileSync(latestPath, "utf8"));
+    const latestVersion = Number(latest.versionCode || 0);
+    const rawLastVersion = Number(req.query.lastVersion || 0);
+    const lastVersion = Number.isFinite(rawLastVersion) ? rawLastVersion : 0;
+
+    if (lastVersion >= latestVersion) {
+      return res.json({
+        success: true,
+        data: {
+          ...latest,
+          updateType: "none",
+          totalRows: 0,
+          gzipFile: "",
+          sqliteFile: "",
+          fromVersion: lastVersion,
+          toVersion: latestVersion
+        }
+      });
+    }
+
+    // User baru / database kosong: kirim FULL data terbaru.
+    if (lastVersion <= 0) {
+      return res.json({
+        success: true,
+        data: {
+          ...latest,
+          updateType: "full",
+          fromVersion: 0,
+          toVersion: latestVersion
+        }
+      });
+    }
+
+    // User lama: buat DELTA semua data setelah versi terakhir user.
+    const SQL = await initSqlJs({
+      locateFile: (file) => path.join(__dirname, "node_modules", "sql.js", "dist", file)
+    });
+
+    const deltaFile = generateDeltaUpdateFile(SQL, lastVersion, latestVersion);
+
+    return res.json({
+      success: true,
+      data: {
+        ...latest,
+        updateType: "delta",
+        versionCode: latestVersion,
+        totalRows: deltaFile.totalRows,
+        sqliteFile: deltaFile.sqliteFileName,
+        gzipFile: deltaFile.gzipFileName,
+        sqlitePath: deltaFile.sqlitePath,
+        gzipPath: deltaFile.gzipPath,
+        fromVersion: lastVersion,
+        toVersion: latestVersion,
+        createdAt: new Date().toISOString()
+      }
+    });
+  } catch (error) {
+    console.error(error);
+
+    return res.status(500).json({
       success: false,
-      message: "Belum ada update tersedia"
+      message: "Gagal ambil update terbaru",
+      error: error.message
     });
   }
-
-  const latest = JSON.parse(fs.readFileSync(latestPath, "utf8"));
-
-  return res.json({
-    success: true,
-    data: latest
-  });
 });
 
 app.get("/api/update/download/:fileName", (req, res) => {
@@ -329,9 +381,12 @@ function ensureVehicleSchema(db) {
       searchKey TEXT,
       sourceType TEXT,
       status TEXT,
-      updatedAt TEXT
+      updatedAt TEXT,
+      dataVersion INTEGER DEFAULT 0
     );
   `);
+
+  ensureColumn(db, "kendaraan_update", "dataVersion", "INTEGER DEFAULT 0");
 
   db.run(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_vehicle
@@ -347,7 +402,160 @@ function ensureVehicleSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_group_number
     ON kendaraan_update(groupNumber);
   `);
+
+  db.run(`
+    CREATE INDEX IF NOT EXISTS idx_data_version
+    ON kendaraan_update(dataVersion);
+  `);
 }
+
+function ensureColumn(db, tableName, columnName, columnDefinition) {
+  const result = db.exec(`PRAGMA table_info(${tableName});`);
+  const columns = result?.[0]?.values?.map((row) => row[1]) || [];
+
+  if (!columns.includes(columnName)) {
+    db.run(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDefinition};`);
+  }
+}
+
+function writeSqliteGzip(sqliteData, baseName) {
+  const sqliteFileName = `${baseName}.sqlite`;
+  const gzipFileName = `${sqliteFileName}.gz`;
+
+  const sqlitePath = path.join(updateDir, sqliteFileName);
+  const gzipPath = path.join(updateDir, gzipFileName);
+
+  fs.writeFileSync(sqlitePath, Buffer.from(sqliteData));
+
+  const gzipData = zlib.gzipSync(Buffer.from(sqliteData), {
+    level: 9
+  });
+
+  fs.writeFileSync(gzipPath, gzipData);
+
+  return {
+    sqliteFileName,
+    gzipFileName,
+    sqlitePath,
+    gzipPath
+  };
+}
+
+function generateDeltaUpdateFile(SQL, lastVersion, latestVersion) {
+  const masterPath = path.join(updateDir, "master.sqlite");
+
+  if (!fs.existsSync(masterPath)) {
+    throw new Error("Master database belum tersedia");
+  }
+
+  const masterData = fs.readFileSync(masterPath);
+  const masterDb = new SQL.Database(masterData);
+
+  ensureVehicleSchema(masterDb);
+
+  const select = masterDb.prepare(`
+    SELECT
+      nopol,
+      groupNumber,
+      namaKendaraan,
+      tahun,
+      warna,
+      noRangka,
+      noMesin,
+      leasing,
+      cabang,
+      saldo,
+      overdue,
+      catatan,
+      searchKey,
+      sourceType,
+      status,
+      updatedAt,
+      dataVersion
+    FROM kendaraan_update
+    WHERE dataVersion > ?
+    ORDER BY dataVersion ASC, nopol ASC;
+  `);
+
+  select.bind([lastVersion]);
+
+  const rows = [];
+
+  while (select.step()) {
+    rows.push(select.getAsObject());
+  }
+
+  select.free();
+  masterDb.close();
+
+  const deltaDb = new SQL.Database();
+  ensureVehicleSchema(deltaDb);
+
+  const insert = deltaDb.prepare(`
+    INSERT OR REPLACE INTO kendaraan_update (
+      nopol,
+      groupNumber,
+      namaKendaraan,
+      tahun,
+      warna,
+      noRangka,
+      noMesin,
+      leasing,
+      cabang,
+      saldo,
+      overdue,
+      catatan,
+      searchKey,
+      sourceType,
+      status,
+      updatedAt,
+      dataVersion
+    ) VALUES (
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+    );
+  `);
+
+  deltaDb.run("BEGIN TRANSACTION;");
+
+  for (const row of rows) {
+    insert.run([
+      row.nopol || "",
+      row.groupNumber || "",
+      row.namaKendaraan || "",
+      row.tahun || "",
+      row.warna || "",
+      row.noRangka || "",
+      row.noMesin || "",
+      row.leasing || "",
+      row.cabang || "",
+      row.saldo || "",
+      row.overdue || "",
+      row.catatan || "",
+      row.searchKey || "",
+      row.sourceType || "ADMIN",
+      row.status || "approved",
+      row.updatedAt || new Date().toISOString(),
+      Number(row.dataVersion || latestVersion)
+    ]);
+  }
+
+  deltaDb.run("COMMIT;");
+  insert.free();
+
+  const sqliteData = deltaDb.export();
+  deltaDb.close();
+
+  const file = writeSqliteGzip(
+    sqliteData,
+    `notebase_delta_${lastVersion}_to_${latestVersion}_${Date.now()}`
+  );
+
+  return {
+    ...file,
+    totalRows: rows.length
+  };
+}
+
 function getLatestUploadedFile() {
   const files = fs
     .readdirSync(uploadDir)
