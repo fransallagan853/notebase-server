@@ -122,7 +122,8 @@ pre {
   display: none !important;
 }
 
-input[type="text"] {
+input[type="text"],
+input[type="number"] {
   background: #0b0f12;
   color: #ffffff;
   border: 1px solid #26323a;
@@ -131,7 +132,8 @@ input[type="text"] {
   min-width: 260px;
 }
 
-input[type="text"]::placeholder {
+input[type="text"]::placeholder,
+input[type="number"]::placeholder {
   color: #6f7a82;
 }
 

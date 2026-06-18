@@ -16,6 +16,8 @@ const latestOutput = document.getElementById("latestOutput");
 
 const manualLeasingInput = document.getElementById("manualLeasingInput");
 const manualCabangInput = document.getElementById("manualCabangInput");
+const periodeBulanInput = document.getElementById("periodeBulanInput");
+const periodeTahunInput = document.getElementById("periodeTahunInput");
 const mappingSection = document.getElementById("mappingSection");
 
 const mapNopol = document.getElementById("mapNopol");
@@ -116,11 +118,18 @@ async function readHeaders() {
 
 async function generateUpdate() {
   const uploadMode = document.querySelector('input[name="uploadMode"]:checked')?.value || "auto";
+  const periodeData = getPeriodeData();
+
+  if (!periodeData) {
+    alert("Pilih Bulan Data dan isi Tahun Data dulu.");
+    return;
+  }
 
   const payload = {
     mode: uploadMode,
     manualLeasing: manualLeasingInput.value.trim(),
     manualCabang: manualCabangInput.value.trim(),
+    periodeData,
     mapping: getMappingPayload()
   };
 
@@ -266,6 +275,15 @@ function setAutoSelected(select, normalizedHeaders, aliases) {
   if (foundIndex >= 0) {
     select.value = normalizedHeaders[foundIndex];
   }
+}
+
+function getPeriodeData() {
+  const bulan = periodeBulanInput.value.trim();
+  const tahun = periodeTahunInput.value.trim();
+
+  if (!bulan || !tahun || tahun.length !== 4) return "";
+
+  return `${bulan}/${tahun.slice(-2)}`;
 }
 
 function getMappingPayload() {

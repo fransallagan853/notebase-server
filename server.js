@@ -96,7 +96,15 @@ app.post("/api/admin/generate-update", async (req, res) => {
     const mode = body.mode || "auto";
     const manualLeasing = body.manualLeasing || "";
     const manualCabang = body.manualCabang || "";
+    const periodeData = normalizePeriodeData(body.periodeData || "");
     const mapping = body.mapping || {};
+
+    if (!periodeData) {
+      return res.status(400).json({
+        success: false,
+        message: "Periode data wajib diisi, contoh: 08/26"
+      });
+    }
 
     if (!fileName) {
       return res.status(400).json({
@@ -153,6 +161,7 @@ app.post("/api/admin/generate-update", async (req, res) => {
     const insert = db.prepare(`
       INSERT OR REPLACE INTO kendaraan_update (
         nopol,
+        nopolKey,
         groupNumber,
         namaKendaraan,
         tahun,
@@ -164,13 +173,14 @@ app.post("/api/admin/generate-update", async (req, res) => {
         saldo,
         overdue,
         catatan,
+        periodeData,
         searchKey,
         sourceType,
         status,
         updatedAt,
         dataVersion
       ) VALUES (
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       );
     `);
 
@@ -184,7 +194,8 @@ app.post("/api/admin/generate-update", async (req, res) => {
         mode,
         mapping,
         manualLeasing,
-        manualCabang
+        manualCabang,
+        periodeData
       });
 
       if (!vehicle.nopol) {
@@ -194,6 +205,7 @@ app.post("/api/admin/generate-update", async (req, res) => {
 
       insert.run([
         vehicle.nopol,
+        vehicle.nopolKey,
         vehicle.groupNumber,
         vehicle.namaKendaraan,
         vehicle.tahun,
@@ -205,6 +217,7 @@ app.post("/api/admin/generate-update", async (req, res) => {
         vehicle.saldo,
         vehicle.overdue,
         vehicle.catatan,
+        vehicle.periodeData,
         vehicle.searchKey,
         vehicle.sourceType,
         vehicle.status,
@@ -237,6 +250,7 @@ app.post("/api/admin/generate-update", async (req, res) => {
       mode,
       manualLeasing,
       manualCabang,
+      periodeData,
       csvRows: records.length,
       processedRows: success,
       failedRows: failed,
@@ -367,6 +381,7 @@ function ensureVehicleSchema(db) {
     CREATE TABLE IF NOT EXISTS kendaraan_update (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       nopol TEXT NOT NULL,
+      nopolKey TEXT NOT NULL DEFAULT '',
       groupNumber TEXT,
       namaKendaraan TEXT,
       tahun TEXT,
@@ -378,6 +393,7 @@ function ensureVehicleSchema(db) {
       saldo TEXT,
       overdue TEXT,
       catatan TEXT,
+      periodeData TEXT NOT NULL DEFAULT '',
       searchKey TEXT,
       sourceType TEXT,
       status TEXT,
@@ -386,11 +402,19 @@ function ensureVehicleSchema(db) {
     );
   `);
 
+  ensureColumn(db, "kendaraan_update", "nopolKey", "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, "kendaraan_update", "periodeData", "TEXT NOT NULL DEFAULT ''");
   ensureColumn(db, "kendaraan_update", "dataVersion", "INTEGER DEFAULT 0");
 
+  backfillNopolKeys(db);
+  dedupeByNopolKey(db);
+
+  db.run("DROP INDEX IF EXISTS idx_unique_vehicle;");
+
   db.run(`
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_vehicle
-    ON kendaraan_update(nopol, leasing, cabang);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_vehicle_nopolKey
+    ON kendaraan_update(nopolKey)
+    WHERE nopolKey != '';
   `);
 
   db.run(`
@@ -407,6 +431,47 @@ function ensureVehicleSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_data_version
     ON kendaraan_update(dataVersion);
   `);
+}
+
+function backfillNopolKeys(db) {
+  const result = db.exec("SELECT id, nopol FROM kendaraan_update WHERE nopolKey IS NULL OR nopolKey = '';");
+  const rows = result?.[0]?.values || [];
+
+  for (const row of rows) {
+    const id = row[0];
+    const nopol = row[1] || "";
+    const nopolKey = generateNopolKey(nopol);
+
+    db.run("UPDATE kendaraan_update SET nopolKey = ? WHERE id = ?;", [nopolKey, id]);
+  }
+}
+
+function dedupeByNopolKey(db) {
+  const result = db.exec(`
+    SELECT id, nopolKey, dataVersion
+    FROM kendaraan_update
+    WHERE nopolKey != ''
+    ORDER BY nopolKey ASC, dataVersion DESC, id DESC;
+  `);
+
+  const rows = result?.[0]?.values || [];
+  const seen = new Set();
+  const deleteIds = [];
+
+  for (const row of rows) {
+    const id = row[0];
+    const nopolKey = row[1] || "";
+
+    if (seen.has(nopolKey)) {
+      deleteIds.push(id);
+    } else {
+      seen.add(nopolKey);
+    }
+  }
+
+  for (const id of deleteIds) {
+    db.run("DELETE FROM kendaraan_update WHERE id = ?;", [id]);
+  }
 }
 
 function ensureColumn(db, tableName, columnName, columnDefinition) {
@@ -456,6 +521,7 @@ function generateDeltaUpdateFile(SQL, lastVersion, latestVersion) {
   const select = masterDb.prepare(`
     SELECT
       nopol,
+      nopolKey,
       groupNumber,
       namaKendaraan,
       tahun,
@@ -467,6 +533,7 @@ function generateDeltaUpdateFile(SQL, lastVersion, latestVersion) {
       saldo,
       overdue,
       catatan,
+      periodeData,
       searchKey,
       sourceType,
       status,
@@ -494,6 +561,7 @@ function generateDeltaUpdateFile(SQL, lastVersion, latestVersion) {
   const insert = deltaDb.prepare(`
     INSERT OR REPLACE INTO kendaraan_update (
       nopol,
+      nopolKey,
       groupNumber,
       namaKendaraan,
       tahun,
@@ -505,13 +573,14 @@ function generateDeltaUpdateFile(SQL, lastVersion, latestVersion) {
       saldo,
       overdue,
       catatan,
+      periodeData,
       searchKey,
       sourceType,
       status,
       updatedAt,
       dataVersion
     ) VALUES (
-      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
     );
   `);
 
@@ -520,6 +589,7 @@ function generateDeltaUpdateFile(SQL, lastVersion, latestVersion) {
   for (const row of rows) {
     insert.run([
       row.nopol || "",
+      row.nopolKey || generateNopolKey(row.nopol || ""),
       row.groupNumber || "",
       row.namaKendaraan || "",
       row.tahun || "",
@@ -531,6 +601,7 @@ function generateDeltaUpdateFile(SQL, lastVersion, latestVersion) {
       row.saldo || "",
       row.overdue || "",
       row.catatan || "",
+      row.periodeData || "",
       row.searchKey || "",
       row.sourceType || "ADMIN",
       row.status || "approved",
@@ -612,6 +683,7 @@ function mapRowToVehicle(row, options = {}) {
 function mapRowToVehicleAuto(row, options = {}) {
   const manualLeasing = options.manualLeasing || "";
   const manualCabang = options.manualCabang || "";
+  const periodeData = options.periodeData || "";
 
   const nopol = getValue(row, [
     "nopol",
@@ -756,7 +828,8 @@ function mapRowToVehicleAuto(row, options = {}) {
     cabang,
     saldo,
     overdue,
-    catatan
+    catatan,
+    periodeData
   });
 }
 
@@ -764,6 +837,7 @@ function mapRowToVehicleManual(row, options = {}) {
   const mapping = options.mapping || {};
   const manualLeasing = options.manualLeasing || "";
   const manualCabang = options.manualCabang || "";
+  const periodeData = options.periodeData || "";
 
   const nopol = getMappedValue(row, mapping.nopol);
   const namaKendaraan = getMappedValue(row, mapping.namaKendaraan);
@@ -793,7 +867,8 @@ function mapRowToVehicleManual(row, options = {}) {
     cabang,
     saldo,
     overdue,
-    catatan
+    catatan,
+    periodeData
   });
 }
 
@@ -821,9 +896,12 @@ function buildVehicle(data) {
   const saldo = data.saldo || "";
   const overdue = data.overdue || "";
   const catatan = data.catatan || "";
+  const periodeData = data.periodeData || "";
+  const nopolKey = generateNopolKey(nopol);
 
   return {
     nopol,
+    nopolKey,
     groupNumber: extractGroupNumber(nopol),
     namaKendaraan,
     tahun,
@@ -835,8 +913,10 @@ function buildVehicle(data) {
     saldo,
     overdue,
     catatan,
+    periodeData,
     searchKey: makeSearchKey(
   nopol,
+  nopolKey,
   namaKendaraan,
   warna,
   noRangka,
@@ -859,6 +939,34 @@ function getValue(row, aliases) {
   }
 
   return "";
+}
+
+function generateNopolKey(nopol) {
+  const clean = String(nopol || "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .trim();
+
+  const match = clean.match(/^([A-Z]{1,2})(\d{1,4})([A-Z]{0,4})$/);
+
+  if (!match) return clean;
+
+  const wilayah = match[1];
+  const angka = match[2].padStart(4, "0");
+  const seri = match[3] || "";
+
+  return `${wilayah}${angka}${seri}`;
+}
+
+function normalizePeriodeData(value) {
+  const clean = String(value || "").trim();
+
+  if (!clean) return "";
+
+  const match = clean.match(/^(0[1-9]|1[0-2])\/(\d{2})$/);
+  if (!match) return "";
+
+  return clean;
 }
 
 function extractGroupNumber(nopol) {

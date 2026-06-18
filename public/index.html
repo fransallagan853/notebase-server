@@ -54,6 +54,36 @@
   </div>
 
   <div class="form-row">
+    <select id="periodeBulanInput">
+      <option value="">Pilih Bulan Data</option>
+      <option value="01">Januari</option>
+      <option value="02">Februari</option>
+      <option value="03">Maret</option>
+      <option value="04">April</option>
+      <option value="05">Mei</option>
+      <option value="06">Juni</option>
+      <option value="07">Juli</option>
+      <option value="08">Agustus</option>
+      <option value="09">September</option>
+      <option value="10">Oktober</option>
+      <option value="11">November</option>
+      <option value="12">Desember</option>
+    </select>
+
+    <input
+      type="number"
+      id="periodeTahunInput"
+      placeholder="Tahun Data, contoh: 2026"
+      min="2020"
+      max="2100"
+    />
+  </div>
+
+  <p class="muted">
+    Periode data dipakai di APK, contoh Agustus 2026 menjadi 08/26.
+  </p>
+
+  <div class="form-row">
     <input type="file" id="csvFile" accept=".csv" />
     <button id="btnUpload">Upload CSV</button>
   </div>
